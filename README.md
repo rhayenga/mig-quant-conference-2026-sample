@@ -2,10 +2,7 @@
     <a href="https://www.michiganinvestmentgroup.com/"><img src="./media/logo.jpeg"></a>
 </div>
 
-# NOTE!
-This repo will likely be more updated than your team repo with demo code so check back here for more examples and starter code!
-
-# Project Challenge 1
+# MIG Algo Comp
 
 - [Competition Docs](https://mig-algo-challenge.vercel.app/)
 - [Discord](https://discord.gg/depR4xR2)
