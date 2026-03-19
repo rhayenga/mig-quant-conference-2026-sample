@@ -35,8 +35,10 @@ For extra packages, include a requirements.txt inside a .zip submission.
 
 import numpy as np
 
-SHORT_WIN = 5
-LONG_WIN  = 20
+SHORT_WIN        = 5
+LONG_WIN         = 20
+SHARPE_LOOKBACK  = 60
+STARTING_CAPITAL = 25_000.0
 
 def _rolling_mean(matrix: np.ndarray, window: int) -> np.ndarray:
     # To get the rolling sum, subtract the sum from 'window' days ago from the running total
@@ -47,14 +49,35 @@ def _rolling_mean(matrix: np.ndarray, window: int) -> np.ndarray:
     out[:, :window - 1] = np.nan
     return out
 
+def _rolling_std(matrix: np.ndarray, window: int) -> np.ndarray:
+    mu  = _rolling_mean(matrix, window)
+    mu2 = _rolling_mean(matrix ** 2, window)
+    var = np.where((mu2 - mu ** 2) < 0, 0.0, mu2 - mu ** 2)
+    return np.sqrt(var)
+
+def _sharpe_weights(prices: np.ndarray) -> np.ndarray:
+    returns = np.diff(prices, axis=1) / np.where(prices[:, :-1] < 1e-9, 1e-9, prices[:, :-1])
+    returns = np.concatenate([np.zeros((prices.shape[0], 1)), returns], axis=1)
+
+    mu     = _rolling_mean(returns, SHARPE_LOOKBACK)
+    std    = _rolling_std(returns, SHARPE_LOOKBACK)
+    std    = np.where(std < 1e-9, 1e-9, std)
+
+    sharpe = np.clip(np.where(np.isnan(mu / std), 0.0, mu / std), 0.0, None)
+    totals = np.where(sharpe.sum(axis=0, keepdims=True) < 1e-9, 1.0,
+                      sharpe.sum(axis=0, keepdims=True))
+    return sharpe / totals
+
 def get_actions(prices: np.ndarray) -> np.ndarray:
     """
-    Vectorized 5/20-day MA crossover.
-    I replaced starter code with pure NumPy operations:
-      1. Compute fast and slow MAs for all stocks simultaneously.
-      2. Derive a desired-position matrix (1 = long, 0 = flat).
-      3. Take the day-over-day diff to get trade signals (+1 buy, -1 sell).
-    Runtime: milliseconds instead of seconds.
+    Vectorized MA crossover + Sharpe-based position sizing.
+
+    Instead of buying a fixed 1 share on every signal, we allocate capital
+    proportional to each stock's rolling Sharpe ratio:
+        dollars_i  = total_capital * weight_i
+        shares_i   = dollars_i / price_i
+
+    Capped at 100 shares per stock to satisfy the position limit.
     """
     num_stocks, num_days = prices.shape
 
@@ -68,4 +91,11 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
     # Only trade on days where the desired position changes
     signals = np.diff(desired, prepend=0.0, axis=1)
 
-    return np.round(signals).astype(np.float64)
+    weights    = _sharpe_weights(prices)
+    alloc      = STARTING_CAPITAL * weights
+    raw_shares = alloc / np.where(prices < 1e-9, 1.0, prices)
+
+    # Clip to the 100 share position limit before returning
+    sized = np.clip(np.round(raw_shares * np.sign(signals)), -100, 100)
+
+    return sized.astype(np.float64)
