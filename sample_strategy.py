@@ -37,7 +37,7 @@ import numpy as np
 
 SHORT_WIN      = 5
 LONG_WIN       = 20
-TARGET_DOLLARS = 800    # dollars to deploy per position
+TARGET_DOLLARS = 800
 
 def _rolling_mean(matrix: np.ndarray, window: int) -> np.ndarray:
     # To get the rolling sum, subtract the sum from 'window' days ago from the running total
@@ -50,20 +50,16 @@ def _rolling_mean(matrix: np.ndarray, window: int) -> np.ndarray:
 
 def get_actions(prices: np.ndarray) -> np.ndarray:
     num_stocks, num_days = prices.shape
-
     fast    = _rolling_mean(prices, SHORT_WIN)
     slow    = _rolling_mean(prices, LONG_WIN)
-
     # 1 where we want to be long, 0 where we want to be flat
     desired = np.where(fast > slow, 1.0, 0.0)
     # No signal until we have enough history to calculate the slow MA
     desired[:, :LONG_WIN] = 0.0
     # Only trade on days where the desired position changes
     signals = np.diff(desired, prepend=0.0, axis=1)
-
     # Size each trade so it costs roughly TARGET_DOLLARS regardless of share price
     shares = np.floor(TARGET_DOLLARS / np.where(prices < 1e-9, 1.0, prices))
     shares = np.clip(shares, 1, 100)
     sized  = np.round(shares * np.sign(signals))
-
     return sized.astype(np.float64)
