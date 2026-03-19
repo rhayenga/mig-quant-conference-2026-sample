@@ -35,9 +35,9 @@ For extra packages, include a requirements.txt inside a .zip submission.
 
 import numpy as np
 
-SHORT_WIN      = 5
-LONG_WIN       = 20
-TARGET_DOLLARS = 800
+SHORT_WIN      = 7
+LONG_WIN       = 30
+TARGET_DOLLARS = 900
 
 def _rolling_mean(matrix: np.ndarray, window: int) -> np.ndarray:
     # To get the rolling sum, subtract the sum from 'window' days ago from the running total
