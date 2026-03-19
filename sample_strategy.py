@@ -34,14 +34,19 @@ For extra packages, include a requirements.txt inside a .zip submission.
 """
 
 import numpy as np
+import talib
 
-SHORT_WIN        = 5
-LONG_WIN         = 20
-SHARPE_LOOKBACK  = 60
-STARTING_CAPITAL = 25_000.0
-PAIRS_Z_WINDOW   = 20
-PAIRS_Z_ENTRY    = 1.5
-PAIRS_Z_EXIT     = 0.25
+SHORT_WIN          = 5
+LONG_WIN           = 20
+SHARPE_LOOKBACK    = 60
+STARTING_CAPITAL   = 25_000.0
+PAIRS_Z_WINDOW     = 20
+PAIRS_Z_ENTRY      = 1.5
+PAIRS_Z_EXIT       = 0.25
+MAX_GROSS_EXPOSURE = 0.95
+RSI_PERIOD         = 14
+RSI_OVERSOLD       = 30    # only buy when RSI is below this
+RSI_OVERBOUGHT     = 70    # only sell when RSI is above this
 
 def _rolling_mean(matrix: np.ndarray, window: int) -> np.ndarray:
     # To get the rolling sum, subtract the sum from 'window' days ago from the running total
@@ -71,6 +76,16 @@ def _sharpe_weights(prices: np.ndarray) -> np.ndarray:
                       sharpe.sum(axis=0, keepdims=True))
     return sharpe / totals
 
+def _compute_rsi(prices: np.ndarray) -> np.ndarray:
+    # Compute RSI for every stock and return a matrix of the same shape as prices
+    num_stocks, num_days = prices.shape
+    rsi = np.full((num_stocks, num_days), 50.0)  # default to neutral 50 during warm-up
+    for i in range(num_stocks):
+        rsi[i] = talib.RSI(prices[i].astype(float), timeperiod=RSI_PERIOD)
+    # Fill any NaNs from the warm-up period with 50 so they never trigger a signal
+    rsi = np.where(np.isnan(rsi), 50.0, rsi)
+    return rsi
+
 def _find_best_pair(prices: np.ndarray):
     # Compute the correlation matrix across all stocks and pick the most correlated pair
     returns = np.diff(prices, axis=1) / np.where(prices[:, :-1] < 1e-9, 1e-9, prices[:, :-1])
@@ -84,7 +99,7 @@ def _pairs_overlay(prices: np.ndarray) -> np.ndarray:
     num_stocks, num_days = prices.shape
     pa = np.zeros((num_stocks, num_days))
 
-    # Detect the most correlated pair from the data 
+    # Detect the most correlated pair from the data — no hardcoded indices
     idx_a, idx_b = _find_best_pair(prices)
 
     ratio  = prices[idx_a] / np.where(prices[idx_b] < 1e-9, 1e-9, prices[idx_b])
@@ -121,13 +136,45 @@ def _pairs_overlay(prices: np.ndarray) -> np.ndarray:
 
     return pa
 
+def _guardrail(actions: np.ndarray, prices: np.ndarray) -> np.ndarray:
+    safe      = actions.copy()
+    cash      = STARTING_CAPITAL
+    positions = np.zeros(prices.shape[0])
+
+    for t in range(prices.shape[1]):
+        # Gross value of all open short positions
+        gross_short = (-np.minimum(positions, 0) * prices[:, t]).sum()
+
+        # If shorts are too large relative to cash, scale today's trades down
+        if cash > 0:
+            exposure_ratio = gross_short / cash
+            if exposure_ratio > MAX_GROSS_EXPOSURE:
+                safe[:, t] *= MAX_GROSS_EXPOSURE / exposure_ratio
+
+        # Enforce position limit after scaling
+        safe[:, t] = np.clip(safe[:, t], -100, 100)
+
+        # Update running cash and positions after today's trades
+        cash      -= (safe[:, t] * prices[:, t]).sum()
+        positions += safe[:, t]
+
+        # Hard stop — if cash goes negative, zero out all trades today
+        if cash < 0:
+            cash      += (safe[:, t] * prices[:, t]).sum()
+            positions -= safe[:, t]
+            safe[:, t] = 0.0
+
+    return np.round(safe).astype(np.float64)
+
 def get_actions(prices: np.ndarray) -> np.ndarray:
     """
-    Vectorized MA crossover + Sharpe sizing + pairs trade overlay.
+    Vectorized MA crossover + RSI filter + Sharpe sizing + pairs trade + debt guardrail.
 
-    The pairs module detects the most correlated stock pair from the data
-    and adds a market-neutral layer that generates returns even when the
-    trend-follower is flat. The two modules are additive.
+    RSI acts as a filter on top of the MA crossover signal:
+      - A buy signal only executes if RSI is below 30 (stock is oversold)
+      - A sell signal only executes if RSI is above 70 (stock is overbought)
+    This filters out crossovers that happen in choppy, directionless markets
+    and improves the quality of every trade rather than the quantity.
 
     Capped at 100 shares per stock to satisfy the position limit.
     """
@@ -143,13 +190,19 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
     # Only trade on days where the desired position changes
     signals = np.diff(desired, prepend=0.0, axis=1)
 
+    # RSI filter — only buy when oversold, only sell when overbought
+    rsi        = _compute_rsi(prices)
+    buy_filter = rsi < RSI_OVERSOLD    # True on days we allow a buy
+    sell_filter = rsi > RSI_OVERBOUGHT  # True on days we allow a sell
+    signals    = np.where(signals > 0, signals * buy_filter,
+                 np.where(signals < 0, signals * sell_filter, 0.0))
+
     weights    = _sharpe_weights(prices)
     alloc      = STARTING_CAPITAL * weights
     raw_shares = alloc / np.where(prices < 1e-9, 1.0, prices)
     sized      = np.clip(np.round(raw_shares * np.sign(signals)), -100, 100)
 
-    # Clip again after adding pairs overlay to respect the position limit
     sized += _pairs_overlay(prices)
     sized  = np.clip(sized, -100, 100)
 
-    return sized.astype(np.float64)
+    return _guardrail(sized, prices)
