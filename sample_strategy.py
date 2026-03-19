@@ -1,18 +1,14 @@
 """
 MIG Quant Competition — Sample Strategy
 ========================================
-
 Your submission must define a top-level function:
-
     get_actions(prices: np.ndarray) -> np.ndarray
-
 Arguments
 ---------
 prices : np.ndarray, shape (num_stocks, num_days)
     Open price for each stock on each trading day.
     Rows are stocks sorted alphabetically by ticker.
     Columns are days in chronological order.
-
 Returns
 -------
 actions : np.ndarray, shape (num_stocks, num_days)
@@ -21,7 +17,6 @@ actions : np.ndarray, shape (num_stocks, num_days)
       -N  →  sell / open short N shares
        0  →  hold (no trade)
     Values are rounded to the nearest integer (no fractional shares).
-
 Competition Rules (summary)
 ---------------------------
 - Starting capital: $25,000
@@ -31,12 +26,10 @@ Competition Rules (summary)
 - No network access inside the sandbox
 - No file I/O inside the sandbox
 - Strategy must be deterministic
-
 Available packages (pre-installed in sandbox)
 ---------------------------------------------
 numpy>=1.26, pandas>=2.0, scipy, scikit-learn>=1.3,
 statsmodels, ta-lib>=0.6.5, numba, joblib
-
 For extra packages, include a requirements.txt inside a .zip submission.
 """
 
@@ -45,16 +38,14 @@ import numpy as np
 SHORT_WIN = 5
 LONG_WIN  = 20
 
-
 def _rolling_mean(matrix: np.ndarray, window: int) -> np.ndarray:
-    # To get the rolling sum, we can subtract the sum from 'window' days ago from the running total
+    # To get the rolling sum, subtract the sum from 'window' days ago from the running total
     cs = np.cumsum(matrix, axis=1)
     cs[:, window:] = cs[:, window:] - cs[:, :-window]
     out = cs / window
     # The first (window-1) columns don't have enough history to be useful
     out[:, :window - 1] = np.nan
     return out
-
 
 def get_actions(prices: np.ndarray) -> np.ndarray:
     """
@@ -63,18 +54,17 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
       1. Compute fast and slow MAs for all stocks simultaneously.
       2. Derive a desired-position matrix (1 = long, 0 = flat).
       3. Take the day-over-day diff to get trade signals (+1 buy, -1 sell).
-    Runtime is theoretically faster (milliseconds instead of seconds).
+    Runtime: milliseconds instead of seconds.
     """
     num_stocks, num_days = prices.shape
 
     fast = _rolling_mean(prices, SHORT_WIN)
     slow = _rolling_mean(prices, LONG_WIN)
 
-    # 1 where we want to be long, 0 where we want to be flat (same as before)
+    # 1 where we want to be long, 0 where we want to be flat
     desired = np.where(fast > slow, 1.0, 0.0)
     # No signal until we have enough history to calculate the slow MA
     desired[:, :LONG_WIN] = 0.0
-
     # Only trade on days where the desired position changes
     signals = np.diff(desired, prepend=0.0, axis=1)
 
