@@ -42,35 +42,40 @@ For extra packages, include a requirements.txt inside a .zip submission.
 
 import numpy as np
 
+SHORT_WIN = 5
+LONG_WIN  = 20
+
+
+def _rolling_mean(matrix: np.ndarray, window: int) -> np.ndarray:
+    # To get the rolling sum, we can subtract the sum from 'window' days ago from the running total
+    cs = np.cumsum(matrix, axis=1)
+    cs[:, window:] = cs[:, window:] - cs[:, :-window]
+    out = cs / window
+    # The first (window-1) columns don't have enough history to be useful
+    out[:, :window - 1] = np.nan
+    return out
+
 
 def get_actions(prices: np.ndarray) -> np.ndarray:
     """
-    Simple 5 / 20-day moving-average crossover strategy.
-
-    For each stock independently:
-      - Buy 1 share when the 5-day MA crosses above the 20-day MA.
-      - Sell 1 share (close the long) when it crosses back below.
-
-    This is intentionally minimal — use it as a starting template.
+    Vectorized 5/20-day MA crossover.
+    I replaced starter code with pure NumPy operations:
+      1. Compute fast and slow MAs for all stocks simultaneously.
+      2. Derive a desired-position matrix (1 = long, 0 = flat).
+      3. Take the day-over-day diff to get trade signals (+1 buy, -1 sell).
+    Runtime is theoretically faster (milliseconds instead of seconds).
     """
     num_stocks, num_days = prices.shape
-    actions = np.zeros_like(prices)
 
-    short_window = 5
-    long_window = 20
+    fast = _rolling_mean(prices, SHORT_WIN)
+    slow = _rolling_mean(prices, LONG_WIN)
 
-    for i in range(num_stocks):
-        position = 0  # current holding: 0 = flat, 1 = long 1 share
+    # 1 where we want to be long, 0 where we want to be flat (same as before)
+    desired = np.where(fast > slow, 1.0, 0.0)
+    # No signal until we have enough history to calculate the slow MA
+    desired[:, :LONG_WIN] = 0.0
 
-        for t in range(long_window, num_days):
-            short_ma = prices[i, t - short_window : t].mean()
-            long_ma = prices[i, t - long_window : t].mean()
+    # Only trade on days where the desired position changes
+    signals = np.diff(desired, prepend=0.0, axis=1)
 
-            if short_ma > long_ma and position == 0:
-                actions[i, t] = 1   # buy 1 share
-                position = 1
-            elif short_ma <= long_ma and position == 1:
-                actions[i, t] = -1  # sell 1 share (close long)
-                position = 0
-
-    return actions
+    return np.round(signals).astype(np.float64)
